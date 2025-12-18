@@ -1,14 +1,14 @@
 package com.example.cs209a_project.service;
 
-import com.example.cs209a_project.repository.QuestionRepository;
 import com.example.cs209a_project.model.MultiThreadingCategory;
 import com.example.cs209a_project.model.Question;
+import com.example.cs209a_project.repository.QuestionRepository;
 import org.springframework.stereotype.Service;
-import java.util.List;
-import java.util.Map;
+
+import java.util.*;
 import java.util.stream.Collectors;
 
-@Service   //define business logic
+@Service
 public class MultiThreadingService {
     private final QuestionRepository questionRepository;
 
@@ -18,36 +18,47 @@ public class MultiThreadingService {
 
     public Map<MultiThreadingCategory, List<QuestionDTO>> classifyAllQuestions() {
         List<Question> allQuestions = questionRepository.findAll();
-        return allQuestions.stream()
-                .filter(question -> MultiThreadingCategory.classify(question.getBody()) != null)   //都是多线程相关的类
+
+        // 优化核心：使用 parallelStream() 利用多核 CPU 并行处理
+        // Jsoup 解析和正则匹配是 CPU 密集型任务，串行处理非常慢
+        return allQuestions.parallelStream()
                 .map(question -> {
-                    MultiThreadingCategory category = MultiThreadingCategory.classify(question.getBody());   //每个问题分类
+                    // Jsoup 解析和正则匹配耗时较高
+                    MultiThreadingCategory category = MultiThreadingCategory.classify(question.getBody());
+                    if (category == null) return null;
                     return new QuestionDTO(
                             question.getQuestionId(),
                             question.getTitle(),
                             category
                     );
                 })
+                .filter(Objects::nonNull)
                 .collect(Collectors.groupingBy(QuestionDTO::getCategory));
     }
 
-    public List<MultiThreadingCategory> getAllCategories() {
+    public List<CategoryStats> getCategoryStatistics() {
         Map<MultiThreadingCategory, List<QuestionDTO>> classifiedMap = classifyAllQuestions();
-        for (Map.Entry<MultiThreadingCategory, List<QuestionDTO>> entry : classifiedMap.entrySet()) {
-            MultiThreadingCategory category = entry.getKey();
-            long count = entry.getValue().size();
-            category.setQuestionCount(count);
-        }
-        return classifiedMap.keySet().stream().toList();
+
+        return Arrays.stream(MultiThreadingCategory.values())
+                .map(category -> {
+                    long count = classifiedMap.getOrDefault(category, Collections.emptyList()).size();
+                    return new CategoryStats(category.name(), count);
+                })
+                .sorted((a, b) -> Long.compare(b.getCount(), a.getCount()))
+                .collect(Collectors.toList());
     }
 
-    public Map<String, Long> countCategoryDistribution() {     //便于画图
-        Map<MultiThreadingCategory, List<QuestionDTO>> classifiedMap = classifyAllQuestions();
-        return classifiedMap.entrySet().stream()
-                .collect(Collectors.toMap(
-                        entry -> entry.getKey().toString(),
-                        entry -> (long) entry.getValue().size()
-                ));
+    public static class CategoryStats {
+        private String category;
+        private long count;
+
+        public CategoryStats(String category, long count) {
+            this.category = category;
+            this.count = count;
+        }
+
+        public String getCategory() { return category; }
+        public long getCount() { return count; }
     }
 
     public static class QuestionDTO {
@@ -61,8 +72,8 @@ public class MultiThreadingService {
             this.category = category;
         }
 
-        public MultiThreadingCategory getCategory() {
-            return category;
-        }
+        public int getQuestionId() { return questionId; }
+        public String getTitle() { return title; }
+        public MultiThreadingCategory getCategory() { return category; }
     }
 }
